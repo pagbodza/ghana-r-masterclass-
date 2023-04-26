@@ -5,11 +5,4 @@ The Ghana R Users Community regularly organised tutorials and meetups for its me
 This tutorial is one of the series of R Masterclass Advanced Users.
 In this tutorial, three R packages are used to demonstrate how to extract data from pdf or jpg or png file types.
 The data used are all from Ghana Statistical Service, either from Population Census or from Inflation data.
-packages:
-tidyverse
-rJava
-tabulizer
-pdftools
-magick
-tesseract
-pdftables
+packages: tidyverse, rJava, tabulizer, pdftools, magick, tesseract, pdftables
