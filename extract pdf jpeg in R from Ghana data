@@ -1,0 +1,393 @@
+#EXTRACT PDF JPED PNG IN R FROM THE GHANA PHC AND CPI DATA
+#@paulaagbodza April 25, 2023
+
+#install required packages
+
+#1. type the ff into your terminal to check for java
+
+java -version
+
+##2. in your console
+
+rJava::.jcall("java.lang.System", "S", "getProperty", "java.version")
+
+#3. if yes then
+
+install.packages("rJava")
+library(rJava)
+
+rJava::.jinit() # zero denotes successful initialization
+
+#otherwise install java before you continue
+
+#https://www.oracle.com/java/technologies/downloads/#license-lightbox
+
+#after installing repeat 1 and 2 and 3 above
+#sometimes this needs to be set to give java higher memory
+
+#options(java.parameters = "-Xmx8000m")
+
+
+install.packages("pdftools")
+install.packages("tabulizer")
+install.packages("pdftables") #not pdf.table[sic]
+install.packages("magick")
+install.packages("tesseract")
+
+
+#options(java.home="C:\\Program Files\\Java\\jdk-18.0.1.1\\")
+
+######
+
+library(tidyverse)
+library(tabulizer)
+library(tabulizerjars)
+library(pdftools)
+library(tabulizer)
+library(tesseract)
+library(magick)
+
+rm(list = ls())
+
+
+#load the PHC 2010 of Ho district
+
+#"C:\Users\xxxx\Desktop\HO MUNICIPAL.pdf"
+
+#use the interactive locate_areas to get the coordinates of vector
+
+vect_cords <- tabulizer::locate_areas("ho_municipal_2010.pdf", pages = 28)
+vect_cords
+
+#four-element numeric vector of coordinates (top,left,bottom,right) 
+#containing the table for the corresponding page
+
+
+vr_phc_pdf2010p28 <- extract_tables("ho_municipal_2010.pdf",
+                                               pages = 28,
+                                          area = list(c(357, 69, 683, 441)),
+                                            output = "data.frame")
+
+##area call now redundant in extract tables
+
+vr_phc_pdf2010 <- tabulizer::extract_tables("ho_municipal_2010.pdf",
+                                            method = "decide",
+                                            output = "data.frame") 
+
+#method could be something else, but guess = TRUE is default
+  
+##inefficient ways of combining the data
+
+vr_phc_pdf20102 <- data.table::rbindlist(list(vr_phc_pdf2010))
+vr_phc_pdf20102 <- data.frame(t(sapply(as.list(vr_phc_pdf2010), c)))#inefficient
+
+#call lists directly
+
+#Table A4: Population by sex, number of households and houses in the
+#20 largest communities
+
+
+ho_city52 <- vr_phc_pdf2010[[52]]|> #call list item 52
+  janitor::row_to_names(2, remove_rows_above = TRUE)|> #make row 2 now column header
+  as_tibble() |> 
+  mutate_at(-c(1,2), parse_number)|>#convert all except columns 1 and 2 into numeric
+  rename(Community = `Community Name`, Households = holds)|>
+  mutate(Community = replace(Community, row_number()== 11, "Akrofu Xeviwofe"))
+
+
+#clean data for the second list
+##corrections to be done on these lines
+
+
+ho_city53_pop <- vr_phc_pdf2010[[53]]|>
+  janitor::row_to_names(2, remove_rows_above = TRUE)|>
+  rename(Community = 2, AllAges = 3)|>
+  as_tibble()|> 
+  slice(-c(1,9,11,14,16))|>#remove these lines 1, 9, 11,14,15,16
+  select(-`S/N`)|>#remove this column
+  separate(`35-39  40-44`, into = c('35-39', '40-44'), sep = " ")|>
+  mutate(Community = replace(Community, row_number()== 8, "Kpenoe Helutsekope"),
+         Community = replace(Community, row_number()== 11, "Akrofu Xeviwofe"))|>
+  mutate_at(-1, parse_number)
+
+#combine the two sets of tables
+
+ho_city2010_tbl <- left_join(
+  ho_city52, ho_city53_pop, by =  "Community")|>#join the two by a common column
+  select(-8)#remove column 8 because it is same as column 2
+  
+
+## function to extract and clean data using tabulizer
+#You may try your hands on it
+#Might not be used without some tweaking
+
+#check a function from
+#https://stackoverflow.com/questions/54403728/tabulizer-package-in-r-how-to-scrape-tables-after-specific-title
+
+#Tabulizer package in R: how to scrape tables after specific Title
+#How to scrape tables preceded with some title text from PDF? 
+
+tables_list <- lapply(tables$page, function(p) {
+  cat(p, "\n")
+  out <- extract_tables("test.pdf", 
+                        pages = p,
+                        encoding = "UTF-8", 
+                        method = "stream", 
+                        output = "matrix")
+  out <- as_tibble(out[[which.max(sapply(out, nrow) + sapply(out, ncol))]]) 
+  # keep the biggest table
+  attr(out, "caption") <- tables$text[tables$page %in% p]
+  return(out)
+})
+
+
+#####
+
+##other uses
+
+tab <- tabulizer::extract_tables(file = "path/file.pdf", pages = 10:16)
+
+#If you only want the text, you should use pdftools which is a lot faster:
+
+text <- pdftools::pdf_text("path/file.pdf")[10:16]
+
+#extract from Ghana PHC 2021
+
+gss_url <- "https://statsghana.gov.gh/gssmain/fileUpload/pressrelease/2021%20PHC%20General%20Report%20Vol%203A_Population%20of%20Regions%20and%20Districts_181121.pdf"
+
+## extract with tabulizer PHC 2021
+
+phc2021_districts <- 
+  tabulizer::extract_tables(
+    gss_url",
+    pages = c(92:111),
+    encoding = "UTF-8", 
+    method = "decide", 
+    output = "data.frame")
+
+
+############
+
+library(magick)
+
+#Table 19: Actual Electricity Consumption for 2019
+#Electricty consumption in GWh
+
+#image stored as "2019_electricity_monthly.png"
+
+elect2019_df <- image_read("2019_electricity_monthly.png") %>% 
+  image_ocr()|>
+  stringi::stri_split(fixed = "\n") %>%
+  purrr::map(~ stringi::stri_split(str = ., fixed = "‘")) %>%
+  .[[1]] %>% 
+  unlist()|>as_tibble()|>slice(-c(1:3, 18))|>
+  janitor::row_to_names(1, remove_rows_above = TRUE)|>
+  separate(1, 
+           into = c('Month', 'ECG', 'NEDCo', 'Enclave Power',
+                    'Mines', 'VALCO', 'Others', 'Export'),
+           sep = " ")|> 
+           mutate_at(-1, parse_number)|>
+  mutate(MonthTotal = rowSums(across(where(is.numeric))))
+
+
+
+
+"GHANA STATISTICAL SERVICE (GSS) Statistical Bulletin
+CONSUMER PRICE INDEX (CPI) MARCH 2023"
+#New Series (2021=100)
+
+#Consumer Price Index (CPI) for MARCH 2023
+
+"The Combined Consumer Price Index (CPI) measures the change over time in the general price 
+level of goods and services that households acquire for the purpose 
+of consumption, with 
+reference to the price level in 2021, the base year, which has an 
+index of 100.
+The year-on-year inflation rate as measured by the CPI was 45.0 
+percent in March 2023 (Figure 
+1). This rate of inflation for March 2023 is the percentage change 
+in the Consumer Price Index 
+(CPI) over the twelve-month period, from March 2022 to March 2023. 
+The monthly change 
+rate for March 2023 is -1.2 percent"
+
+
+
+
+#Read from PDF files
+"If your images are stored in PDF files they first 
+need to be converted to a proper image format. 
+Use a high DPI to keep quality of the image."
+
+require(pdftools)
+require(tesseract)
+
+
+cpi_pngfile <- pdftools::pdf_convert('https://statsghana.gov.gh/gssmain/fileUpload/Price%20Indices/Bulletin_%20CPI%20March%202023.pdf', 
+                                     pages = 7:11, dpi = 600)
+## Converting page 1 to ocrscan_1.png... done!
+
+cpi_pngfile_df <- tesseract::ocr(cpi_pngfile)
+cpi_gh_df <- cat(cpi_pngfile_df)
+
+#cpi_gh_df #print and copy from console to edit
+
+
+#"Table 3 : Consumer Price Index, March 2023
+#Index Change rate (%)
+#Item (COICOP Classification Weight 2021=100 Monthly Yearly
+###<* Classification of Individual Consumption by Purpose>
+
+
+COICOP_cpi <- read.table(header = TRUE, text = 
+                           "'Item (COICOP Classification)' Weight '2021=100' Monthly Yearly
+'Non-food Inflation rate' 56.90 159.8 1.5 40.6
+'Alcoholic Beverages, Tobacco & Narcotics' 343.79 193.2 0.01 41.2
+'Clothing and footwear' 62.06 151.1 -1.16 36.3
+'Housing, water, electricity, gas and other fuels' 124.19 195.4 -1.27 64.7
+'Furnishings, household equipment and routine household maintenance' 40.68 193.0 2.36 6.74
+Health 6.49 137.1 -2 27.9
+Transport 95.42 162.6 -3.16 92.0
+'Information and communication' 19.95 126.4 -1.42 13.8
+'Recreation, sport and culture' 21.86 151.5 -2.69 32.8
+'Education services' 9.67 110.4 -2 32.9
+'Restaurants and accommodation services' 28.02 118.5 0.50 6.9
+'Insurance and financial services' 11.00 112.9 -0.4 10.5
+'Personal care, social protection and miscellaneous goods and services' 18.86 174.9 -2.10 93.")|>
+  as_tibble()
+
+
+COICOP_cpi |>
+  rename(`Item (COICOP Classification)` = 1, `2021=100` = 3)
+
+
+#alternative model (this datset is corrected)
+#make header = FALSE, so as to maintain the header as row 1
+#it's the default anyway (so it's redundant in this code)
+
+
+cpi_march <- read.table(header = FALSE, text = 
+                          "Subgroups Weight 'Index 2021=100' 'Monthly Chg %' 'Yearly Chg %'
+'Food and non-alcoholic beverages' 43.12 175.36 -0.9 50.8
+'Cereals and cereal products' 7.8 198.38 -0.3 68.8
+'Live animals, meat and other parts of slaughtered land animals' 3.2 177.0 -2.3 54.7
+'Fish and other seafood' 7.6 180.0 -1.4 55.2
+'Milk, other dairy products and eggs' 1.3 197.8 -0.7 73.2
+'Oils and fats' 1.3 176.3 -0.7 56.4
+'Fruits and nuts' 1.1 159.2 -1.2 38.5
+'Vegetables, tubers, plantains, cooking bananas and pulses' 9.5 145.2 0.2 25.8
+'Sugar, confectionery and desserts' 1.0 190.2 -2.6 64.3
+'Ready-made food and other food products n.e.c.' 8.0 177.6 -1.4 55.1
+'Fruit and vegetable juices' 0.2 199.3 -2.5 77.1
+'Coffee and coffee substitutes' 0.1 154.8 -3.3 44.0
+'Tea, mate and other plant products for infusion' 0.1 191.9 -4.3 72.1
+'Cocoa drinks' 0.0 153.4 5.6 34.2
+Water 1.1 199.7 -1.8 63.9
+'Soft drinks' 0.6 166.5 -1.5 44.4")|>
+  janitor::row_to_names(1, remove_rows_above = TRUE)
+
+
+
+
+
+require(magick)
+#Replicating the GSS image published on twitter April 15, 2023
+#https://twitter.com/StatsGhana/status/1647259174454149120
+
+
+gss_cpiIMG <- image_read("Ftw9eIrWYAAHrmK.jpeg")
+
+gss_cpiIMG %>% image_resize("1200x")
+
+
+gss_cpiIMG_df <- gss_cpiIMG%>%
+  image_resize("2000x") %>%
+  image_convert(type = 'Grayscale') %>%
+  image_trim(fuzz = 40) %>%
+  image_write(format = 'png', density = '300x300') %>%
+  tesseract::ocr() 
+
+cat(gss_cpiIMG_df)
+
+#copy from console and edit
+
+
+gss_cpi_tbl <- read.table(
+  text = 
+"48.6%
+14.8%
+12.2%
+6.9%
+4.8%
+3.6% 
+3.0% 
+2.5%
+1.3% 
+1.2% 
+0.7% 
+0.5% 
+0.1%
+'Food and non-alcoholic beverages'
+'Housing, water, electricity, gas, and other fuels'
+Transport 
+'Clothing and footwear'
+'Furnishings, household equipment'
+'Alcoholic beverages, tobacco and narcotics'
+'Personal care, social protection and misc services'
+'Recreation and culture'
+'Information and communication'
+Education 
+'Restaurant and accommodation'
+Health 
+'Insurance and financial services'")
+
+#clean data
+
+gss_cpi_tbl2 <- gss_cpi_tbl|>t()|>
+  matrix(ncol = 13, byrow = TRUE)|>
+  t()|>as_tibble()|>
+  rename(Perce = 1, Subgroup = 2)|>
+  relocate(2, .before = 1)|>
+  mutate(Perce = as.numeric(str_squish(sub("%", "", Perce))))
+
+
+#visualise data
+
+#set.seed(29271)
+
+
+gss_cpi_tbl2|>
+  ggplot()+
+  geom_histogram(stat = "identity", aes(reorder(Subgroup, Perce), 
+                    Perce, fill = Subgroup), show.legend = FALSE)+
+  geom_text(aes(reorder(Subgroup, Perce), 
+                    Perce, label = paste0(Perce, "%")), hjust = .2)+
+  scale_x_discrete(labels = function(x) str_wrap(x, 15))+
+  coord_flip()+
+  labs(x = "", y = "",
+       title = "Ghana shares of inflation for groups - March 2023",
+       subtitle = "Replication of Ghana Statistical Service plot using R. 
+NB: Rounding errors can affect the total!",
+       caption = "\ua9paagbodza plot with data extracted from 
+       @StatsGhana plot on twitter Apr 15, 2023") +
+  annotate(geom = "text", x = 8.5, y = 37, 
+           label = "\ua9PAAGBODZA", alpha = 0.6, color = "grey90")+ 
+  theme_minimal()
+  
+  
+######
+##alternative ways of extracting the data
+
+
+ghanaCPI_march3 <- tabulizer::extract_tables("https://statsghana.gov.gh/gssmain/fileUpload/Price%20Indices/Bulletin_%20CPI%20March%202023.pdf")
+
+ghanaCPI_march <- ghanaCPI_march %>% .[7:11]
+
+ghanaCPI_march2023 <- tabulizer::extract_tables("C:/Users/xxxx/Desktop/gss cpi march 2023.pdf")
+
+#with pdftools: ocr and convert
+
+ghanaCPI_march2023 <- pdftools::pdf_ocr_data("C:/Users/xxxx/Desktop/gss cpi march 2023.pdf")
+ghanaCPI_march2023png <- pdftools::pdf_convert("C:/Users/xxxx/Desktop/gss cpi march 2023.pdf", format = "png")
+
+ghanaCPI_march2023png
